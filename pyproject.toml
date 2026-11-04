@@ -1,0 +1,26 @@
+[project]
+name = "haas-fn-dictation"
+version = "0.1.0"
+description = "Push-to-talk dictation on macOS with the Haas-ja-v1.0 speech recognition model"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "haas-asr @ git+https://github.com/third-intelligence/Haas-ASR.git",
+    "einops",
+    "sounddevice",
+    "numpy",
+    "pyobjc-framework-Quartz",
+    "pyobjc-framework-Cocoa",
+]
+
+[tool.uv]
+package = false
+# haas-asr pins flash-linear-attention, which needs Triton + CUDA and cannot be
+# installed on macOS. kda_torch.py replaces the one layer it is used for.
+override-dependencies = [
+    "flash-linear-attention; sys_platform == 'never'",
+    # Same overrides as the Haas-ASR repository (NeMo 2.7.3 needs them to load the model).
+    "fsspec[http]>=2026.6.0",
+    "hydra-core>=1.3.8",
+    "packaging>=26.3",
+    "transformers>=5.10.0",
+]
