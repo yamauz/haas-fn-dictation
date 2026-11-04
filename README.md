@@ -1,93 +1,94 @@
 # haas-fn-dictation
 
-日本語音声認識モデル [Haas-ja-v1.0](https://huggingface.co/third-intelligence/Haas-ja-v1.0) を Mac のローカルで動かす、プッシュトゥトーク入力のサンプル。
+A push-to-talk dictation sample that runs the Japanese speech recognition model [Haas-ja-v1.0](https://huggingface.co/third-intelligence/Haas-ja-v1.0) locally on a Mac.
 
-**fn キーを押している間だけ録音し、離すと文字起こしして、カーソルのあるフィールドに貼り付ける。** 音声は外部に送信しない。
+**Hold fn to record; release it and the transcript is pasted into whatever field has the focus.** No audio leaves your machine.
 
-## Mac で動かすための工夫
+## Making it run on macOS
 
-公式には Haas は「Linux + NVIDIA GPU のみ対応、CPU と macOS は非対応」となっている。予測ネットワークの Kimi Delta Attention (KDA) 層が flash-linear-attention の Triton/CUDA カーネルに依存しているため。
+Officially, Haas supports only Linux with an NVIDIA GPU; CPU and macOS are not supported. The reason is the Kimi Delta Attention (KDA) layer in its prediction network, which depends on flash-linear-attention's Triton/CUDA kernels.
 
-ただ KDA はモデル全体 616M パラメータのうち 3.9M の小さな部分で、エンコーダ本体は普通の FastConformer。そこで [`kda_torch.py`](kda_torch.py) で KDA 層を純 PyTorch で書き直し、`haas_asr` が使うクラスを差し替えている。
+KDA, however, is a small part of the model (3.9M of 616M parameters), and the encoder is a standard FastConformer. [`kda_torch.py`](kda_torch.py) reimplements the KDA layer in pure PyTorch and swaps it into the class `haas_asr` uses.
 
-- パラメータ名・形状は fla 0.5.2 と同一なので、公開チェックポイントをそのまま読み込める
-- 計算は fla の `fused_recurrent_kda` カーネルと同じ式(qk の L2 正規化、ゲート、beta の sigmoid、value-first の状態)
-- `flash-linear-attention` は `pyproject.toml` の `override-dependencies` でインストール対象から外している
+- Parameter names and shapes are identical to fla 0.5.2, so the published checkpoint loads as is
+- The math follows fla's `fused_recurrent_kda` kernel (qk L2 normalization, gating, sigmoid beta, value-first state)
+- `flash-linear-attention` is excluded from installation through `override-dependencies` in `pyproject.toml`
 
-M2 Pro での実測(7 秒の音声):MPS で約 0.17 秒、CPU で約 1.3 秒。
+Measured on an M2 Pro (7 seconds of audio): about 0.17 s on MPS, about 1.3 s on CPU.
 
-## セットアップ
+## Setup
 
-[uv](https://docs.astral.sh/uv/) が必要。
+Requires [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync
 ```
 
-初回起動時にモデル(約 2.4GB)を Hugging Face からダウンロードする。
+The model (about 2.4 GB) is downloaded from Hugging Face on the first run.
 
-### macOS の設定
+### macOS settings
 
-1. **fn キーの既定動作を止める**:システム設定 > キーボード >「🌐 キーを押して」を「何もしない」にする。絵文字ピッカーや標準の音声入力が開くのを防ぐため
-2. **権限**:スクリプトを実行するターミナルアプリ(Terminal / iTerm / VS Code など)に以下を許可する。初回起動時にダイアログが出るので、許可したらターミナルアプリを再起動する
-   - プライバシーとセキュリティ > **入力監視**(fn キーの検知)
-   - プライバシーとセキュリティ > **アクセシビリティ**(⌘V での貼り付け)
-   - プライバシーとセキュリティ > **マイク**(録音)
+1. **Disable the default fn key action**: in System Settings > Keyboard, set "Press 🌐 key to" to "Do Nothing", so the emoji picker or the built-in dictation doesn't open
+2. **Permissions**: grant the following to the terminal app that runs the script (Terminal, iTerm, VS Code, ...). A prompt appears on the first run; after granting, restart the terminal app
+   - Privacy & Security > **Input Monitoring** (detecting the fn key)
+   - Privacy & Security > **Accessibility** (pasting with ⌘V)
+   - Privacy & Security > **Microphone** (recording)
 
-## 使い方
+## Usage
 
 ```bash
 uv run python dictate.py
 ```
 
-「準備完了」と出たら、テキストを入力したい場所にカーソルを置き、fn を押しながら話して離す。
+When it says it is ready (「準備完了」), put the cursor where you want the text, hold fn while you speak, then release.
 
-- 0.3 秒未満の押下は無視する
-- fn を押したまま他のキーを押した場合(fn+矢印など)は取り消す
-- 30 秒を超える録音は無音区間で分割して認識する
-- 貼り付けはクリップボード経由で、貼り付け後に元のクリップボードの内容を戻す
-- `--device cpu` で CPU 実行に切り替えられる
+- Presses shorter than 0.3 s are ignored
+- Pressing another key while holding fn (fn + arrows, etc.) cancels the recording
+- Recordings longer than 30 s are split at silences before recognition
+- Pasting goes through the clipboard, and the previous clipboard contents are restored afterwards
+- `--device cpu` switches to CPU inference
 
-## 押している間ずっと入力する(shift + fn)
+## Streaming while held (shift + fn)
 
-**shift + fn** を押している間は、話の区切り(0.6 秒の無音)ごとに文字起こしして、その場で貼り付けていく。離すと、最後の区切りの分を貼り付けて終わる。長めに話すときに、離すまで待たずに文字が出てくる。
+While **shift + fn** is held, each phrase is transcribed and pasted as soon as you pause (0.6 s of silence). When you release, the last phrase is pasted and the mode ends. For longer dictation, text appears without waiting for the release.
 
-- 無音の判定は音量(RMS)が `SPEECH_RMS = 0.01` 未満かどうか。周りがうるさくて区切れない、または小声で途切れる場合は `dictate.py` の定数を調整する
-- 無音がなくても 20 秒で区切る
-- fn を先に押してから shift を足しても切り替わる。control と同時に押した場合はコマンドモードが優先
+- Silence means the volume (RMS) is below `SPEECH_RMS = 0.01`. If phrases don't split in a noisy room, or quiet speech gets cut off, adjust the constants in `dictate.py`
+- A phrase is cut at 20 s even without a pause
+- Adding shift after pressing fn also switches to this mode. If control is held too, command mode takes priority
 
-## 音声でアプリを開く(fn + control)
+## Opening apps by voice (fn + control)
 
-**fn + control** を押しながら「Slack」「クローム開いて」などと話すと、そのアプリを開く。今のところ対応しているのは Slack と Google Chrome。
+Hold **fn + control** and say something like 「Slack」 or 「クローム開いて」 ("open Chrome") to open that app. Slack and Google Chrome are supported for now.
 
-どのアプリを開くかは [Laya](https://huggingface.co/convaiinnovations/laya) で判定している。Laya は TypeSafe Jev 互換のローカル判定モデルで、文章を生成せず、決められた選択肢それぞれの確率だけを返す。読み込み方は fx-chart の `tools/system_one.py` と同じで、multilingual チェックポイント(英語版は日本語を読めない)を `device="mps"` で読む。初回は約 650MB をダウンロードする。
+Which app to open is decided by [Laya](https://huggingface.co/convaiinnovations/laya), a local decision model compatible with TypeSafe Jev. It never generates text; it returns only a probability for each option of a fixed-choice question. The multilingual checkpoint is used (the English one cannot read Japanese), loaded with `device="mps"` set explicitly. About 650 MB is downloaded on the first run.
 
-- 選択肢は `slack` / `chrome` / `none`。`none` が選ばれたら何もしない
-- コマンドモードの文字起こしでは Haas のカスタム語彙(`launcher.VOCABULARY`)を有効にする。これがないと短い「Slack」が「スナック」になることがある
-- アプリを増やすときは `launcher.py` の `APPS` と `VOCABULARY` に足す
-- `--no-launcher` を付けると Laya を読み込まない(起動が速くなる)
+- The options are `slack` / `chrome` / `none`; nothing happens when `none` is chosen
+- In command mode, transcription uses Haas's custom vocabulary (`launcher.VOCABULARY`). Without it, a short 「Slack」 can come out as 「スナック」 ("snack")
+- To add apps, extend `APPS` and `VOCABULARY` in `launcher.py`
+- `--no-launcher` skips loading Laya (faster startup)
 
-### なぜ専用のキーにしているか
+### Why a dedicated key
 
-最初は、普段の音声入力をすべて Laya に通して「アプリ起動の命令か」も判定させようとした。でもゼロショットの multilingual 版はこの判定が苦手だった(M2 Pro で実測、1 判定あたり約 20ms)。
+The first attempt ran every dictation through Laya and also asked it whether the utterance was a command to open an app. The zero-shot multilingual model turned out to be poor at that (measured on an M2 Pro, about 20 ms per decision).
 
-| 質問の作り方 | 命令の検出 | 普通の文の誤検出 |
+| Question design | Detecting commands | False positives on ordinary sentences |
 |---|---|---|
-| choice 1 問(slack / chrome / none) | 12/12 | 「Slackで連絡しておきます」→ slack **0.99**、「このバグを修正しました」→ chrome 0.81 |
-| noul「今アプリを開けと言っているか」 | 「Slackを開いて」**0.10**、「スラック」0.01 で取りこぼし | ほぼなし |
+| One choice question (slack / chrome / none) | 12/12 | 「Slackで連絡しておきます」 ("I'll reach out on Slack") → slack **0.99**, 「このバグを修正しました」 ("I fixed this bug") → chrome 0.81 |
+| A yes/no question "is the user asking to open an app now?" | Missed: 「Slackを開いて」 ("open Slack") **0.10**, 「スラック」 ("Slack") 0.01 | Almost none |
 
-fx-chart の `docs/laya-local.md` にある通り multilingual 版は温度較正がされておらず、間違えていても確信度が 0.99 になる。なので「命令かどうか」はユーザーにキーで明示してもらい、Laya には「どのアプリか」だけを聞いている。普段の音声入力にも混ぜたいなら、ラベル付きデータでのファインチューニングと温度較正が要る。
+The multilingual checkpoint isn't temperature-calibrated, so it reports 0.99 confidence even when wrong. So the user states "this is a command" with the key, and Laya is asked only which app. Mixing commands into normal dictation would need fine-tuning on labeled data plus calibration.
 
-## ファイル
+## Files
 
-| ファイル | 内容 |
+| File | Contents |
 |---|---|
-| [`dictate.py`](dictate.py) | fn キー監視・録音・文字起こし・貼り付け・垂れ流しモード・コマンドモード |
-| [`launcher.py`](launcher.py) | Laya の読み込み、アプリ判定、アプリ起動 |
-| [`kda_torch.py`](kda_torch.py) | KDA 層の純 PyTorch 実装と差し替え処理 |
+| [`dictate.py`](dictate.py) | fn key monitoring, recording, transcription, pasting, streaming mode, command mode |
+| [`launcher.py`](launcher.py) | Loading Laya, deciding the app, launching it |
+| [`kda_torch.py`](kda_torch.py) | Pure-PyTorch KDA layer and the code that swaps it in |
 
-## 補足
+## Notes
 
-- マイクの入力ストリームは起動中ずっと開いている(話し始めの取りこぼしを防ぐため)。録音するのは fn を押している間だけだが、メニューバーのマイクインジケーターは点灯したままになる
-- 終了時に `multiprocess` の `AttributeError: '_thread.RLock' ...` が出ることがあるが、NeMo の依存パッケージの終了処理によるもので動作には影響しない
-- 純 PyTorch 版 KDA は推論専用。学習には fla の chunk カーネルを使う公式環境を使うこと
+- The microphone input stream stays open while the script runs (so the first syllable isn't lost). Audio is recorded only while fn is held, but the menu bar microphone indicator stays on
+- On exit, `multiprocess` may print `AttributeError: '_thread.RLock' ...`. It comes from the shutdown of a NeMo dependency and is harmless
+- The pure-PyTorch KDA is for inference only. For training, use the official environment with fla's chunk kernels
+- Console messages are in Japanese
